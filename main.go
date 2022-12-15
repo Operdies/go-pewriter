@@ -31,7 +31,6 @@ func getChecksumOffset(data []byte) uint32 {
 }
 
 func computeChecksum(data []byte) (checksum uint64) {
-	checksum = 0
 	checksumOffset := getChecksumOffset(data)
 
 	remainder := len(data) % 4
@@ -44,17 +43,15 @@ func computeChecksum(data []byte) (checksum uint64) {
 		paddedData = append(data, make([]byte, padding)...)
 	}
 
-	var lim uint64 = 2 << 32
+	checksum = 0
 	for i := 0; i < len(data)/4; i++ {
 		// The checksum bytes are not considered for the checksum
 		if i == int(checksumOffset)/4 {
 			continue
 		}
-		dword := readUint32(paddedData, uint32(i*4))
+		dword := binary.LittleEndian.Uint32(paddedData[i*4:])
 		checksum += uint64(dword)
-		if checksum >= lim {
-			checksum = (checksum & 0xFFFFFFFF) + (checksum >> 32)
-		}
+		checksum = (checksum & 0xFFFFFFFF) + (checksum >> 32)
 	}
 	checksum = (checksum & 0xFFFF) + (checksum >> 16)
 	checksum = checksum + (checksum >> 16)
