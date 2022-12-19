@@ -1,9 +1,9 @@
 go-pewriter: main.go
 	go build .
 
-infile="$(HOME)/tmp/Runner.exe"
-outfile="Runner.Injected.exe"
-payload="$$(cat ./test-payload.json)"
+infile="test/TOTALCMD64.EXE"
+outfile="test/TOTALCMD64.INJECTED.EXE"
+payload="test-payload.json"
 
 $(outfile): go-pewriter
 
@@ -14,4 +14,4 @@ read: write
 	./go-pewriter -file $(outfile) -read
 
 clean:
-	rm -f ./go-pewriter $(outfile) ./test-payload.jsoN
+	rm -f ./go-pewriter $(outfile) ./test-payload.json
