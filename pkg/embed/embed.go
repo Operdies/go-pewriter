@@ -2,9 +2,14 @@ package embed
 
 import (
 	"encoding/binary"
+	json "encoding/json"
+	"fmt"
 )
 
 const IMAGE_DIRECTORY_ENTRY_SECURITY = 4
+
+var payloadStartSeq = []byte("PAYLOAD\x00\x00")
+var peStartSeq = []byte("PE\x00\x00")
 
 var quietFlag = false
 
@@ -77,51 +82,52 @@ func readDataDirectory(data []byte, offset uint32) (result DataDirectory) {
 	return
 }
 
-func ReadPayload(data []byte) []byte {
-	secOffset := getSecurityDirectoryOffset(data)
-	dd := readDataDirectory(data, secOffset)
+func getPayloadOffset(data []byte) uint32 {
+	if IsPeFile(data) {
+		// If this is a PE file, we assume the payload was embedded in the
+		// security data directory
+		secOffset := getSecurityDirectoryOffset(data)
+		dd := readDataDirectory(data, secOffset)
 
-	ddEnd := dd.VirtualAddress + dd.Size
-	payloadSize := readUint32(data, ddEnd-4)
-	payloadStart := dd.VirtualAddress + dd.Size - 4 - payloadSize
-	payload := data[payloadStart : ddEnd-4]
-
-	return payload
-}
-
-func AddPayload(data []byte, payload []byte) []byte {
-	secOffset := getSecurityDirectoryOffset(data)
-	dd := readDataDirectory(data, secOffset)
-
-	// The payload must size must be a multiple of 8
-	// The end token contains 4 byte
-	// Therefore, the payload should be aligned on an 8-byte boundary, minus 4
-
-	padding := (8 - ((len(payload) + 4) % 8)) % 8
-	padArray := make([]byte, padding)
-
-	paddedPayload := append(payload, padArray...)
-	paddedPayload = binary.LittleEndian.AppendUint32(paddedPayload, uint32(len(paddedPayload)))
-
-	currentSize := dd.Size
-	newSize := currentSize + uint32(len(paddedPayload))
-	newSizeBytes := getBytes(newSize)
-
-	// Sausage the payload into the data directory
-	ddEnd := dd.VirtualAddress + dd.Size
-	pre := data[:ddEnd]
-	post := data[ddEnd:]
-
-	result := append(append(pre, paddedPayload...), post...)
-
-	// Overwrite the size field in the data directory
-	for i := 0; i < 4; i++ {
-		result[i+int(secOffset)+4] = newSizeBytes[i]
+		ddEnd := dd.VirtualAddress + dd.Size
+		return ddEnd
 	}
 
-	// Update the checksum
-	updateChecksum(result)
-	return result
+	return uint32(len(data))
+}
+
+func ReadWholePayload(data []byte) (map[string][]byte, error) {
+	payloadEnd := getPayloadOffset(data)
+
+	payloadSize := readUint32(data, payloadEnd-4)
+	payloadStart := payloadEnd - 4 - payloadSize
+
+	// If there is currently no payload, return an empty map
+	if (payloadStart + uint32(len(payloadStartSeq))) > uint32(len(data)) {
+		return make(map[string][]byte), nil
+	}
+	magic := data[payloadStart : int(payloadStart)+len(payloadStartSeq)]
+	if seqEqual(magic, payloadStartSeq) == false {
+		return make(map[string][]byte), nil
+	}
+
+	// Otherwise parse the payload
+	payload := data[payloadStart+uint32(len(payloadStartSeq)) : payloadEnd-4]
+	var result map[string][]byte
+	err := json.Unmarshal(payload, &result)
+	return result, err
+}
+
+func ReadPayload(data []byte, key string) ([]byte, error) {
+	payload, err := ReadWholePayload(data)
+	if err != nil {
+		return nil, err
+	}
+	result, ok := payload[key]
+	if ok {
+		return result, nil
+	}
+	return nil, fmt.Errorf("No such key.")
 }
 
 func seqEqual(a []byte, b []byte) bool {
@@ -141,8 +147,7 @@ func seqEqual(a []byte, b []byte) bool {
 
 func IsPeFile(data []byte) bool {
 	fileHeaderOffset := readUint32(data, 0x3c)
-	signature := []byte{'P', 'E', 0, 0}
-	return seqEqual(data[fileHeaderOffset:fileHeaderOffset+4], signature)
+	return seqEqual(data[fileHeaderOffset:fileHeaderOffset+4], peStartSeq)
 }
 
 func getSecurityDirectoryOffset(data []byte) uint32 {
@@ -165,4 +170,46 @@ func getSecurityDirectoryOffset(data []byte) uint32 {
 	secOffset := optionalHeaderOffset + dataDirectoryOffset + (uint32(ddSize) * uint32(secIndex))
 
 	return secOffset
+}
+
+func AddPayload(data []byte, payload []byte, key string) []byte {
+	padding := (8 - ((len(payload) + 4) % 8)) % 8
+	padArray := make([]byte, padding)
+
+	paddedPayload := append(payload, padArray...)
+	paddedPayload = binary.LittleEndian.AppendUint32(paddedPayload, uint32(len(paddedPayload)))
+
+	if IsPeFile(data) {
+		// If this is a PE file, we embed the payload int the security data directory
+		secOffset := getSecurityDirectoryOffset(data)
+		dd := readDataDirectory(data, secOffset)
+
+		// The payload must size must be a multiple of 8
+		// The end token contains 4 byte
+		// Therefore, the payload should be aligned on an 8-byte boundary, minus 4
+
+		currentSize := dd.Size
+		newSize := currentSize + uint32(len(paddedPayload))
+		newSizeBytes := getBytes(newSize)
+
+		// Sausage the payload into the data directory
+		ddEnd := dd.VirtualAddress + dd.Size
+		pre := data[:ddEnd]
+		post := data[ddEnd:]
+
+		result := append(append(pre, paddedPayload...), post...)
+
+		// Overwrite the size field in the data directory
+		for i := 0; i < 4; i++ {
+			result[i+int(secOffset)+4] = newSizeBytes[i]
+		}
+
+		// Update the checksum
+		updateChecksum(result)
+		return result
+	} else {
+		// Otherwise we append it to the file
+		result := append(data, paddedPayload...)
+		return result
+	}
 }

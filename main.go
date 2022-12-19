@@ -19,6 +19,9 @@ func main() {
 	var inFile = ""
 	var outFile = ""
 	var payloadFlag = ""
+	var payloadKey = ""
+	var getKeys = false
+	var dump = false
 
 	flag.BoolVar(&writeFlag, "write", false, "Write a payload to a file")
 	flag.BoolVar(&readFlag, "read", false, "Read a payload from a file")
@@ -26,6 +29,9 @@ func main() {
 	flag.StringVar(&inFile, "file", "", "The file to read or write")
 	flag.StringVar(&outFile, "out", "", "The file to write the result to")
 	flag.StringVar(&payloadFlag, "payload", "", "The payload to embed")
+	flag.StringVar(&payloadKey, "key", "", "The name of the payload to embed")
+	flag.BoolVar(&getKeys, "keys", false, "List the keys embedded in the file")
+	flag.BoolVar(&dump, "dump", false, "Dump the entire embedded json object")
 
 	flag.Parse()
 
@@ -53,25 +59,35 @@ func main() {
 
 	data, _ = os.ReadFile(inFile)
 
-	if embed.IsPeFile(data) {
+	if writeFlag || readFlag {
+		if payloadKey == "" {
+			log.Fatalln("No payload key specified.")
+		}
+	}
+	if writeFlag {
+		log.Printf("Adding payload to %v\n", inFile)
+		payload, _ := os.ReadFile(payloadFlag)
+		data = embed.AddPayload(data, payload, payloadKey)
+		log.Printf("Saving result to %v\n", outFile)
+		os.WriteFile(outFile, data, stat.Mode())
+	}
+	if readFlag {
 		if writeFlag {
-			log.Printf("Adding payload to %v\n", inFile)
-			payload, _ := os.ReadFile(payloadFlag)
-			data = embed.AddPayload(data, payload)
-			log.Printf("Saving result to %v\n", outFile)
-			os.WriteFile(outFile, data, stat.Mode())
+			log.Printf("Reading the payload which was written to %v\n", outFile)
+		} else {
+			log.Printf("Reading payload from %v\n", inFile)
 		}
-		if readFlag {
-			if writeFlag {
-				log.Printf("Reading the payload which was written to %v\n", outFile)
-			} else {
-				log.Printf("Reading payload from %v\n", inFile)
-			}
-			payload := embed.ReadPayload(data)
-			fmt.Println(string(payload))
+		payload, err := embed.ReadPayload(data, payloadKey)
+		if err != nil {
+			log.Fatalln(err)
 		}
-	} else {
-		// If it is not a PE file, we just append the data and hope for the best
-		log.Fatalln("Only PE files are currently supported.")
+		fmt.Println(string(payload))
+	}
+	if dump {
+		payload, err := embed.ReadWholePayload(data)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		fmt.Printf("payload: %v\n", payload)
 	}
 }
