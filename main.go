@@ -202,7 +202,8 @@ func main() {
 	if isPeFile(data) {
 		if writeFlag {
 			log.Printf("Adding payload to %v\n", inFile)
-			data = addPayload(data, []byte(payloadFlag))
+			payload, _ := os.ReadFile(payloadFlag)
+			data = addPayload(data, payload)
 			log.Printf("Saving result to %v\n", outFile)
 			os.WriteFile(outFile, data, stat.Mode())
 		}
