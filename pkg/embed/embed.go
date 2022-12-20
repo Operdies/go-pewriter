@@ -13,11 +13,6 @@ var peStartSeq = []byte("PE\x00\x00")
 
 var quietFlag = false
 
-type DataDirectory struct {
-	VirtualAddress uint32
-	Size           uint32
-}
-
 func readUint16(data []byte, offset uint32) uint16 {
 	return binary.LittleEndian.Uint16(data[offset:])
 }
@@ -96,6 +91,21 @@ func getPayloadOffset(data []byte) uint32 {
 	return uint32(len(data))
 }
 
+func HasPayload(data []byte) bool {
+	payloadEnd := getPayloadOffset(data)
+
+	payloadSize := readUint32(data, payloadEnd-4)
+	payloadStart := payloadEnd - 4 - payloadSize
+
+	// If the payload pointer points out of bounds, it is invalid, and we know there is no payload
+	if (payloadStart + uint32(len(payloadStartSeq))) > uint32(len(data)) {
+		return false
+	}
+	magic := data[payloadStart : int(payloadStart)+len(payloadStartSeq)]
+	// There is a payload if the data at the payload offset matches the magic sequence
+	return seqEqual(magic, payloadStartSeq)
+}
+
 func ReadWholePayload(data []byte) (map[string][]byte, error) {
 	payloadEnd := getPayloadOffset(data)
 
@@ -119,12 +129,10 @@ func ReadWholePayload(data []byte) (map[string][]byte, error) {
 }
 
 func ReadPayload(data []byte, key string) ([]byte, error) {
-	payload, err := ReadWholePayload(data)
-	if err != nil {
-		return nil, err
-	}
-	result, ok := payload[key]
+	directories := ReadPayloadDirectory(data)
+	result, ok := directories[key]
 	if ok {
+		result := data[result.Offset : result.Offset+result.Size]
 		return result, nil
 	}
 	return nil, fmt.Errorf("No such key.")
@@ -172,44 +180,98 @@ func getSecurityDirectoryOffset(data []byte) uint32 {
 	return secOffset
 }
 
-func AddPayload(data []byte, payload []byte, key string) []byte {
-	padding := (8 - ((len(payload) + 4) % 8)) % 8
-	padArray := make([]byte, padding)
+func ReadPayloadDirectory(data []byte) map[string]Directory {
+	payloadEnd := getPayloadOffset(data)
 
-	paddedPayload := append(payload, padArray...)
-	paddedPayload = binary.LittleEndian.AppendUint32(paddedPayload, uint32(len(paddedPayload)))
+	payloadSize := readUint32(data, payloadEnd-4)
+	payloadStart := payloadEnd - 4 - payloadSize
 
-	if IsPeFile(data) {
-		// If this is a PE file, we embed the payload int the security data directory
-		secOffset := getSecurityDirectoryOffset(data)
-		dd := readDataDirectory(data, secOffset)
-
-		// The payload must size must be a multiple of 8
-		// The end token contains 4 byte
-		// Therefore, the payload should be aligned on an 8-byte boundary, minus 4
-
-		currentSize := dd.Size
-		newSize := currentSize + uint32(len(paddedPayload))
-		newSizeBytes := getBytes(newSize)
-
-		// Sausage the payload into the data directory
-		ddEnd := dd.VirtualAddress + dd.Size
-		pre := data[:ddEnd]
-		post := data[ddEnd:]
-
-		result := append(append(pre, paddedPayload...), post...)
-
-		// Overwrite the size field in the data directory
-		for i := 0; i < 4; i++ {
-			result[i+int(secOffset)+4] = newSizeBytes[i]
-		}
-
-		// Update the checksum
-		updateChecksum(result)
-		return result
-	} else {
-		// Otherwise we append it to the file
-		result := append(data, paddedPayload...)
-		return result
+	// If there is currently no payload, return an empty map
+	if (payloadStart + uint32(len(payloadStartSeq))) > uint32(len(data)) {
+		return make(map[string]Directory)
 	}
+	magic := data[payloadStart : int(payloadStart)+len(payloadStartSeq)]
+	if seqEqual(magic, payloadStartSeq) == false {
+		return make(map[string]Directory)
+	}
+
+	// Otherwise parse the payload
+	payload := data[payloadStart+uint32(len(payloadStartSeq)) : payloadEnd-4]
+	var result map[string]Directory
+	json.Unmarshal(payload, &result)
+	return result
+
 }
+
+func WriteSecurityDirectorySize(data []byte, secOffset uint32, secSize uint32) {
+	sizeBytes := getBytes(secSize)
+
+	// Overwrite the size field in the data directory
+	for i := 0; i < 4; i++ {
+		data[i+int(secOffset)+4] = sizeBytes[i]
+	}
+
+}
+
+func AddPayload(data []byte, value []byte, key string) []byte {
+	directory := ReadPayloadDirectory(data)
+	secOffset := getSecurityDirectoryOffset(data)
+	dd := readDataDirectory(data, secOffset)
+	secOffsetEnd := int(dd.Size + dd.VirtualAddress)
+	// If the file currently has no embedding, we need to add the magic sequence
+
+	// If this is the first entry, it should start immediately after the current content of the security directory
+	// Otherwise it should follow the last entry of the current directories
+	entryStart := int(dd.VirtualAddress + dd.Size)
+	for _, v := range directory {
+		if v.Size+v.Offset > entryStart {
+			entryStart = (v.Size) + (v.Offset)
+		}
+	}
+	// Add the entry to the directory
+	directory[key] = Directory{Offset: entryStart, Size: len(value)}
+	directoryBytes, _ := json.Marshal(directory)
+
+	directoryBytes = append(payloadStartSeq, directoryBytes...)
+	directoryBytes = binary.LittleEndian.AppendUint32(directoryBytes, uint32(len(directoryBytes)))
+
+	// Calculate padding -- assume that `data` is already padded, and we removed the padding by removing the current embedding directory
+	// The padding can be safely added before the magic sequence, but after the embedded payloads
+	// The padding is then removed on each successive embedding
+	totalPayloadLength := (entryStart + len(value) + len(directoryBytes))
+	padding := (8 - (totalPayloadLength % 8)) % 8
+	if padding > 0 {
+		padArray := make([]byte, padding)
+		directoryBytes = append(padArray, directoryBytes...)
+	}
+
+	// Append the newest payload with
+	// 1. padding
+	// 2. magic sequence
+	// 3. updated directory of named payloads
+	payload := append(value, directoryBytes...)
+
+	// Add the payload at the end of the directory
+	result := append(data[:entryStart], payload...)
+	newSize := len(result) - int(dd.VirtualAddress)
+	// Append everything following the security directory
+	result = append(result, data[secOffsetEnd:]...)
+	// Update the size of the directory
+	WriteSecurityDirectorySize(result, secOffset, uint32(newSize))
+	// Update the checksumn
+	updateChecksum(result)
+	return result
+}
+
+type DataDirectory struct {
+	VirtualAddress uint32
+	Size           uint32
+}
+
+type Directory struct {
+	Size   int
+	Offset int
+}
+
+// format ??
+// DATA ... [{"key",Address,Size] END

@@ -28,7 +28,7 @@ func main() {
 	flag.BoolVar(&quietFlag, "quiet", false, "Squelch informational logging")
 	flag.StringVar(&inFile, "file", "", "The file to read or write")
 	flag.StringVar(&outFile, "out", "", "The file to write the result to")
-	flag.StringVar(&payloadFlag, "payload", "", "The payload to embed")
+	flag.StringVar(&payloadFlag, "payload", "", "The file containing the payload to embed.")
 	flag.StringVar(&payloadKey, "key", "", "The name of the payload to embed")
 	flag.BoolVar(&getKeys, "keys", false, "List the keys embedded in the file")
 	flag.BoolVar(&dump, "dump", false, "Dump the entire embedded json object")
@@ -74,8 +74,6 @@ func main() {
 	if readFlag {
 		if writeFlag {
 			log.Printf("Reading the payload which was written to %v\n", outFile)
-		} else {
-			log.Printf("Reading payload from %v\n", inFile)
 		}
 		payload, err := embed.ReadPayload(data, payloadKey)
 		if err != nil {
@@ -84,10 +82,10 @@ func main() {
 		fmt.Println(string(payload))
 	}
 	if dump {
-		payload, err := embed.ReadWholePayload(data)
-		if err != nil {
-			log.Fatalln(err)
+		dir := embed.ReadPayloadDirectory(data)
+		for k := range dir {
+			payload, _ := embed.ReadPayload(data, k)
+			fmt.Printf("%v: %v\n", k, string(payload))
 		}
-		fmt.Printf("payload: %v\n", payload)
 	}
 }
