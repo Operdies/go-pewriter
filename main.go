@@ -79,7 +79,7 @@ func main() {
 		if err != nil {
 			log.Fatalln(err)
 		}
-		fmt.Println(string(payload))
+		fmt.Print(string(payload))
 	}
 	if dump {
 		dir := embed.ReadPayloadDirectory(data)

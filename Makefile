@@ -1,3 +1,5 @@
+#  <() is not supported in the default shell 'sh' -- use bash
+SHELL := /bin/bash
 go-pewriter: main.go
 	go build .
 
