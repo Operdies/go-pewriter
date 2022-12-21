@@ -91,21 +91,6 @@ func getPayloadOffset(data []byte) uint32 {
 	return uint32(len(data))
 }
 
-func HasPayload(data []byte) bool {
-	payloadEnd := getPayloadOffset(data)
-
-	payloadSize := readUint32(data, payloadEnd-4)
-	payloadStart := payloadEnd - 4 - payloadSize
-
-	// If the payload pointer points out of bounds, it is invalid, and we know there is no payload
-	if (payloadStart + uint32(len(payloadStartSeq))) > uint32(len(data)) {
-		return false
-	}
-	magic := data[payloadStart : int(payloadStart)+len(payloadStartSeq)]
-	// There is a payload if the data at the payload offset matches the magic sequence
-	return seqEqual(magic, payloadStartSeq)
-}
-
 func ReadWholePayload(data []byte) (map[string][]byte, error) {
 	payloadEnd := getPayloadOffset(data)
 
@@ -132,7 +117,7 @@ func ReadPayload(data []byte, key string) ([]byte, error) {
 	directories := ReadPayloadDirectory(data)
 	result, ok := directories[key]
 	if ok {
-		result := data[result.Offset : result.Offset+result.Size]
+		result := data[result.VirtualAddress : result.VirtualAddress+result.Size]
 		return result, nil
 	}
 	return nil, fmt.Errorf("No such key.")
@@ -180,7 +165,7 @@ func getSecurityDirectoryOffset(data []byte) uint32 {
 	return secOffset
 }
 
-func ReadPayloadDirectory(data []byte) map[string]Directory {
+func ReadPayloadDirectory(data []byte) map[string]DataDirectory {
 	payloadEnd := getPayloadOffset(data)
 
 	payloadSize := readUint32(data, payloadEnd-4)
@@ -188,16 +173,16 @@ func ReadPayloadDirectory(data []byte) map[string]Directory {
 
 	// If there is currently no payload, return an empty map
 	if (payloadStart + uint32(len(payloadStartSeq))) > uint32(len(data)) {
-		return make(map[string]Directory)
+		return make(map[string]DataDirectory)
 	}
 	magic := data[payloadStart : int(payloadStart)+len(payloadStartSeq)]
 	if seqEqual(magic, payloadStartSeq) == false {
-		return make(map[string]Directory)
+		return make(map[string]DataDirectory)
 	}
 
 	// Otherwise parse the payload
 	payload := data[payloadStart+uint32(len(payloadStartSeq)) : payloadEnd-4]
-	var result map[string]Directory
+	var result map[string]DataDirectory
 	json.Unmarshal(payload, &result)
 	return result
 
@@ -222,19 +207,19 @@ func AddPayload(data []byte, value []byte, key string) []byte {
 
 	// If this is the first entry, it should start immediately after the current content of the security directory
 	// Otherwise it should follow the last entry of the current directories
-	var entryStart int
+	var entryStart uint32
 	if len(directory) == 0 {
-		entryStart = int(dd.VirtualAddress + dd.Size)
+		entryStart = dd.VirtualAddress + dd.Size
 	} else {
 		for _, v := range directory {
-			if v.Size+v.Offset > entryStart {
-				entryStart = (v.Size) + (v.Offset)
+			if v.Size+v.VirtualAddress > entryStart {
+				entryStart = (v.Size) + (v.VirtualAddress)
 			}
 		}
 	}
-	
+
 	// Add the entry to the directory
-	directory[key] = Directory{Offset: entryStart, Size: len(value)}
+	directory[key] = DataDirectory{VirtualAddress: entryStart, Size: uint32(len(value))}
 	directoryBytes, _ := json.Marshal(directory)
 
 	directoryBytes = append(payloadStartSeq, directoryBytes...)
@@ -243,7 +228,7 @@ func AddPayload(data []byte, value []byte, key string) []byte {
 	// Calculate padding -- assume that `data` is already padded, and we removed the padding by removing the current embedding directory
 	// The padding can be safely added before the magic sequence, but after the embedded payloads
 	// The padding is then removed on each successive embedding
-	totalPayloadLength := (entryStart + len(value) + len(directoryBytes))
+	totalPayloadLength := (int(entryStart) + len(value) + len(directoryBytes))
 	padding := (8 - (totalPayloadLength % 8)) % 8
 	if padding > 0 {
 		padArray := make([]byte, padding)
@@ -272,11 +257,3 @@ type DataDirectory struct {
 	VirtualAddress uint32
 	Size           uint32
 }
-
-type Directory struct {
-	Size   int
-	Offset int
-}
-
-// format ??
-// DATA ... [{"key",Address,Size] END
