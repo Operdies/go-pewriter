@@ -65,16 +65,11 @@ func main() {
 		}
 	}
 	if writeFlag {
-		log.Printf("Adding payload to %v\n", inFile)
 		payload, _ := os.ReadFile(payloadFlag)
 		data = embed.AddPayload(data, payload, payloadKey)
-		log.Printf("Saving result to %v\n", outFile)
 		os.WriteFile(outFile, data, stat.Mode())
 	}
 	if readFlag {
-		if writeFlag {
-			log.Printf("Reading the payload which was written to %v\n", outFile)
-		}
 		payload, err := embed.ReadPayload(data, payloadKey)
 		if err != nil {
 			log.Fatalln(err)

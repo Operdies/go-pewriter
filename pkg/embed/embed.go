@@ -222,12 +222,17 @@ func AddPayload(data []byte, value []byte, key string) []byte {
 
 	// If this is the first entry, it should start immediately after the current content of the security directory
 	// Otherwise it should follow the last entry of the current directories
-	entryStart := int(dd.VirtualAddress + dd.Size)
-	for _, v := range directory {
-		if v.Size+v.Offset > entryStart {
-			entryStart = (v.Size) + (v.Offset)
+	var entryStart int
+	if len(directory) == 0 {
+		entryStart = int(dd.VirtualAddress + dd.Size)
+	} else {
+		for _, v := range directory {
+			if v.Size+v.Offset > entryStart {
+				entryStart = (v.Size) + (v.Offset)
+			}
 		}
 	}
+	
 	// Add the entry to the directory
 	directory[key] = Directory{Offset: entryStart, Size: len(value)}
 	directoryBytes, _ := json.Marshal(directory)

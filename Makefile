@@ -15,7 +15,10 @@ write: go-pewriter
 	./go-pewriter -file $(outfile) -write -key another-key -payload <(echo -ne 'Overwritten key') -out $(outfile)
 
 read: write
-	./go-pewriter -file $(outfile) -read -key testkey -dump
+	./go-pewriter -file $(outfile) -read -key testkey
+
+dump: write 
+	./go-pewriter -file $(outfile) -dump
 
 clean:
 	rm -f ./go-pewriter $(outfile) ./test-payload.json
